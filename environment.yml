@@ -1,0 +1,9 @@
+name: citation-sync-action
+channels:
+  - conda-forge
+dependencies:
+  - pip
+  - python >=3.12
+  - pip:
+      - pre-commit
+      - rumdl
