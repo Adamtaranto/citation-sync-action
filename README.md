@@ -475,5 +475,3 @@ If you use this action in your research software, you can cite it as:
 This action was developed to simplify citation management for research software projects. Special thanks to the Citation File Format community for creating and maintaining the CFF specification.
 
 ---
-
-**Made with ❤️ by [Adam Taranto](https://github.com/Adamtaranto)**
