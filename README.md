@@ -200,6 +200,10 @@ jobs:
 | `skip-ci` | Add [skip ci] to commit message | No | `true` |
 | `fail-on-conflict` | Fail if incremented tag already exists | No | `true` |
 | `validate-cff` | Validate CITATION.cff format | No | `true` |
+| `use-pull-request` | Create PR instead of direct push (for protected branches) | No | `false` |
+| `pr-branch-prefix` | Prefix for PR branch names | No | `citation-sync-` |
+| `pr-title` | PR title template (use `{version}`) | No | `Update CITATION.cff to version {version}` |
+| `pr-body` | PR body template (use `{version}`, `{date}`, `{original_tag}`) | No | `This PR updates CITATION.cff based on tag {original_tag}.` |
 
 ## Outputs
 
@@ -211,6 +215,8 @@ jobs:
 | `new-version` | The new version written to CITATION.cff |
 | `commit-sha` | The commit SHA with updated CITATION.cff |
 | `target-branch` | The branch that was updated |
+| `pull-request-number` | The PR number (if `use-pull-request: true`) |
+| `pull-request-url` | The PR URL (if `use-pull-request: true`) |
 
 ### Using Outputs
 
@@ -241,6 +247,77 @@ The action requires `contents: write` permission to:
 permissions:
   contents: write
 ```
+
+If using `use-pull-request: true`, also add `pull-requests: write`:
+
+```yaml
+permissions:
+  contents: write
+  pull-requests: write  # Required for creating pull requests
+```
+
+### Branch Protection
+
+**⚠️ Important**: This action requires direct push access to your target branch (usually `main`).
+
+#### If Your Branch is Protected
+
+If your default branch has protection rules enabled (requires PR reviews, status checks, etc.), you have several options:
+
+##### Option 1: Use Pull Request Mode (Recommended)
+
+Enable PR mode to create a pull request instead of pushing directly:
+
+```yaml
+- uses: Adamtaranto/citation-sync-action@v1
+  with:
+    use-pull-request: true
+    token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+The action will:
+
+- Create a new branch with the citation updates
+- Open a pull request to your default branch
+- You can then review and merge through your normal PR workflow
+
+⚠️ **Note**: In `increment` mode with `use-pull-request: true`, you'll need to manually create the new version tag after merging the PR.
+
+##### Option 2: Use a Different Branch
+
+Configure the action to push to a non-protected branch:
+
+```yaml
+- uses: Adamtaranto/citation-sync-action@v1
+  with:
+    target-branch: citation-updates
+```
+
+##### Option 3: Use Admin Token
+
+Use a Personal Access Token (PAT) with admin privileges or bypass permissions:
+
+```yaml
+- uses: Adamtaranto/citation-sync-action@v1
+  with:
+    token: ${{ secrets.ADMIN_PAT }}
+```
+
+##### Option 4: Configure Branch Protection Bypass
+
+In your repository settings, configure branch protection to allow this workflow to bypass restrictions:
+
+- Go to Settings → Branches → Branch protection rules
+- Edit your protection rule
+- Under "Allow specified actors to bypass required pull requests", add the GitHub Actions app
+
+#### Branch Protection Detection
+
+The action automatically detects if your target branch is protected and will:
+
+- ✅ Proceed normally if `use-pull-request: true`
+- ❌ Fail with a helpful error message if `use-pull-request: false` (with solutions)
+- ⚠️ Warn if protection status cannot be determined
 
 ### Checkout Configuration
 
@@ -330,7 +407,50 @@ jobs:
           commit-message: 'docs: Update CITATION.cff for release {version}'
 ```
 
-### Example 3: Custom Prefix and Branch
+### Example 3: Protected Branch with Pull Request Mode
+
+```yaml
+name: Update Citation via PR
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  pull-requests: write  # Required for creating PRs
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: Adamtaranto/citation-sync-action@v1
+        id: sync
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          use-pull-request: true
+          pr-title: 'chore: Update CITATION.cff to {version}'
+          pr-body: |
+            Automated citation update triggered by tag {original_tag}.
+
+            This PR updates the CITATION.cff file with:
+            - Version: {version}
+            - Date: {date}
+
+            Please review and merge.
+
+      - name: Comment on PR
+        if: steps.sync.outputs.pull-request-number != ''
+        run: |
+          echo "Created PR #${{ steps.sync.outputs.pull-request-number }}"
+          echo "URL: ${{ steps.sync.outputs.pull-request-url }}"
+```
+
+### Example 4: Custom Prefix and Branch
 
 ```yaml
 name: Citation Sync with Custom Settings
@@ -357,7 +477,7 @@ jobs:
           target-branch: 'develop'
 ```
 
-### Example 4: With Conditional Actions
+### Example 5: With Conditional Actions
 
 ```yaml
 name: Citation Sync with Notifications

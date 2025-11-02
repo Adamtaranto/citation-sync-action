@@ -57,6 +57,22 @@ inputs:
     description: 'Validate CITATION.cff format before and after updates.'
     required: false
     default: 'true'
+  use-pull-request:
+    description: 'Create a pull request instead of pushing directly to the target branch. Required for protected branches.'
+    required: false
+    default: 'false'
+  pr-branch-prefix:
+    description: 'Prefix for pull request branch names (only used when use-pull-request is true).'
+    required: false
+    default: 'citation-sync-'
+  pr-title:
+    description: 'Title template for pull request. Use {version} as placeholder (only used when use-pull-request is true).'
+    required: false
+    default: 'Update CITATION.cff to version {version}'
+  pr-body:
+    description: 'Body template for pull request. Use {version}, {date}, {original_tag} as placeholders (only used when use-pull-request is true).'
+    required: false
+    default: 'This PR updates CITATION.cff based on tag {original_tag}.'
 outputs:
   needs-update:
     description: 'Whether CITATION.cff needed updating (true/false).'
@@ -76,6 +92,12 @@ outputs:
   target-branch:
     description: 'The branch that was updated (detected or specified).'
     value: ${{ steps.detect-branch.outputs.target_branch }}
+  pull-request-number:
+    description: 'The pull request number (if use-pull-request is true and update was needed).'
+    value: ${{ steps.create-pr.outputs.pr_number }}
+  pull-request-url:
+    description: 'The pull request URL (if use-pull-request is true and update was needed).'
+    value: ${{ steps.create-pr.outputs.pr_url }}
 runs:
   using: 'composite'
   steps:
@@ -119,6 +141,68 @@ runs:
           echo "::error::Target branch '${TARGET_BRANCH}' does not exist"
           exit 1
         fi
+    - name: Check branch protection status
+      id: check-protection
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        TARGET_BRANCH="${{ steps.detect-branch.outputs.target_branch }}"
+        REPO="${{ github.repository }}"
+        USE_PR="${{ inputs.use-pull-request }}"
+
+        echo "::group::Checking branch protection status for ${TARGET_BRANCH}"
+
+        # Query GitHub API for branch protection rules
+        HTTP_CODE=$(curl -s -w "%{http_code}" -o /tmp/protection.json \
+          -H "Authorization: token ${GITHUB_TOKEN}" \
+          -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/repos/${REPO}/branches/${TARGET_BRANCH}/protection" 2>/dev/null || echo "000")
+
+        if [ "${HTTP_CODE}" = "200" ]; then
+          echo "protected=true" >> $GITHUB_OUTPUT
+          echo "::warning::⚠️  Branch '${TARGET_BRANCH}' is protected"
+
+          if [ "${USE_PR}" != "true" ]; then
+            echo "::error::━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "::error::❌ BRANCH PROTECTION DETECTED"
+            echo "::error::━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "::error::"
+            echo "::error::The target branch '${TARGET_BRANCH}' has protection rules enabled."
+            echo "::error::This action cannot push directly to protected branches."
+            echo "::error::"
+            echo "::error::🔧 SOLUTIONS:"
+            echo "::error::"
+            echo "::error::1. Enable Pull Request Mode (Recommended):"
+            echo "::error::   Add to your workflow:"
+            echo "::error::   with:"
+            echo "::error::     use-pull-request: true"
+            echo "::error::"
+            echo "::error::2. Use a different branch without protection:"
+            echo "::error::   with:"
+            echo "::error::     target-branch: citation-updates"
+            echo "::error::"
+            echo "::error::3. Use a PAT with admin/bypass permissions:"
+            echo "::error::   with:"
+            echo "::error::     token: \${{ secrets.ADMIN_PAT }}"
+            echo "::error::"
+            echo "::error::4. Configure branch protection to allow bypass for this workflow"
+            echo "::error::"
+            echo "::error::━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            exit 1
+          else
+            echo "::notice::✓ Pull request mode enabled - will create PR instead of direct push"
+          fi
+        elif [ "${HTTP_CODE}" = "404" ]; then
+          echo "protected=false" >> $GITHUB_OUTPUT
+          echo "::notice::✓ Branch '${TARGET_BRANCH}' is not protected"
+        else
+          echo "protected=unknown" >> $GITHUB_OUTPUT
+          echo "::warning::Unable to determine branch protection status (HTTP ${HTTP_CODE})"
+          echo "::warning::Will attempt to push - may fail if branch is protected"
+        fi
+
+        echo "::endgroup::"
     - name: Get tag information
       id: tag-info
       shell: bash
@@ -413,8 +497,8 @@ runs:
         NEW_COMMIT=$(git rev-parse HEAD)
         echo "new_commit=${NEW_COMMIT}" >> $GITHUB_OUTPUT
         echo "::notice::Created commit ${NEW_COMMIT}"
-    - name: Create new tag (increment mode only)
-      if: steps.check-update.outputs.needs_update == 'true' && inputs.update-mode == 'increment'
+    - name: Push changes directly (increment mode, direct push)
+      if: steps.check-update.outputs.needs_update == 'true' && inputs.update-mode == 'increment' && inputs.use-pull-request != 'true'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
@@ -443,8 +527,8 @@ runs:
 
         echo "::endgroup::"
         echo "::notice::Successfully created new tag ${INCREMENTED_TAG_NAME} at commit ${NEW_COMMIT}"
-    - name: Push changes (match mode only)
-      if: steps.check-update.outputs.needs_update == 'true' && inputs.update-mode == 'match'
+    - name: Push changes directly (match mode, direct push)
+      if: steps.check-update.outputs.needs_update == 'true' && inputs.update-mode == 'match' && inputs.use-pull-request != 'true'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
@@ -462,6 +546,103 @@ runs:
 
         echo "::endgroup::"
         echo "::notice::Successfully pushed commit ${NEW_COMMIT} to ${TARGET_BRANCH}"
+    - name: Create pull request
+      if: steps.check-update.outputs.needs_update == 'true' && inputs.use-pull-request == 'true'
+      id: create-pr
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        TARGET_BRANCH="${{ steps.detect-branch.outputs.target_branch }}"
+        NEW_COMMIT="${{ steps.commit.outputs.new_commit }}"
+        REPO="${{ github.repository }}"
+
+        # Determine version for PR title/body
+        if [ "${{ inputs.update-mode }}" = "increment" ]; then
+          NEW_VERSION="${{ steps.tag-info.outputs.incremented_version }}"
+          INCREMENTED_TAG_NAME="${{ steps.tag-info.outputs.incremented_tag_name }}"
+        else
+          NEW_VERSION="${{ steps.tag-info.outputs.tag_version }}"
+        fi
+
+        ORIGINAL_TAG="${{ steps.tag-info.outputs.tag_name }}"
+        TAG_DATE="${{ steps.tag-info.outputs.tag_date }}"
+
+        # Generate PR branch name with timestamp to avoid conflicts
+        TIMESTAMP=$(date +%s)
+        PR_BRANCH="${{ inputs.pr-branch-prefix }}${NEW_VERSION}-${TIMESTAMP}"
+
+        echo "::group::Creating pull request"
+        echo "::notice::PR branch: ${PR_BRANCH}"
+
+        # Push to PR branch
+        git push origin "HEAD:${PR_BRANCH}" || {
+          echo "::error::Failed to push to PR branch ${PR_BRANCH}"
+          exit 1
+        }
+
+        # Prepare PR title and body with substitutions
+        PR_TITLE="${{ inputs.pr-title }}"
+        PR_TITLE="${PR_TITLE//\{version\}/${NEW_VERSION}}"
+
+        PR_BODY="${{ inputs.pr-body }}"
+        PR_BODY="${PR_BODY//\{version\}/${NEW_VERSION}}"
+        PR_BODY="${PR_BODY//\{date\}/${TAG_DATE}}"
+        PR_BODY="${PR_BODY//\{original_tag\}/${ORIGINAL_TAG}}"
+
+        # Add update summary to PR body
+        UPDATE_SUMMARY="${{ steps.check-update.outputs.update_summary }}"
+        if [ -n "${UPDATE_SUMMARY}" ]; then
+          PR_BODY="${PR_BODY}
+
+        ## Changes
+
+        ${UPDATE_SUMMARY}"
+        fi
+
+        # Add mode-specific information
+        if [ "${{ inputs.update-mode }}" = "increment" ]; then
+          PR_BODY="${PR_BODY}
+
+        ## New Tag
+
+        After merging this PR, a new tag \`${INCREMENTED_TAG_NAME}\` will be created."
+        fi
+
+        # Create PR using GitHub API
+        PR_RESPONSE=$(curl -s -X POST \
+          -H "Authorization: token ${GITHUB_TOKEN}" \
+          -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/repos/${REPO}/pulls" \
+          -d "$(jq -n \
+            --arg title "${PR_TITLE}" \
+            --arg body "${PR_BODY}" \
+            --arg head "${PR_BRANCH}" \
+            --arg base "${TARGET_BRANCH}" \
+            '{title: $title, body: $body, head: $head, base: $base}')")
+
+        PR_NUMBER=$(echo "${PR_RESPONSE}" | jq -r '.number // empty')
+        PR_URL=$(echo "${PR_RESPONSE}" | jq -r '.html_url // empty')
+
+        if [ -z "${PR_NUMBER}" ] || [ "${PR_NUMBER}" = "null" ]; then
+          echo "::error::Failed to create pull request"
+          echo "::error::Response: ${PR_RESPONSE}"
+          exit 1
+        fi
+
+        echo "pr_number=${PR_NUMBER}" >> $GITHUB_OUTPUT
+        echo "pr_url=${PR_URL}" >> $GITHUB_OUTPUT
+        echo "pr_branch=${PR_BRANCH}" >> $GITHUB_OUTPUT
+
+        echo "::endgroup::"
+        echo "::notice::✓ Created pull request #${PR_NUMBER}"
+        echo "::notice::URL: ${PR_URL}"
+
+        # If increment mode, we need to handle tag creation after PR merge
+        # For now, just note this in the PR
+        if [ "${{ inputs.update-mode }}" = "increment" ]; then
+          echo "::warning::⚠️  In increment mode with PR: You must manually create tag ${INCREMENTED_TAG_NAME} after merging the PR"
+        fi
     - name: Create job summary
       if: always()
       shell: bash
@@ -479,7 +660,14 @@ runs:
           echo "${{ steps.check-update.outputs.update_summary }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          if [ "${{ inputs.update-mode }}" = "increment" ]; then
+          if [ "${{ inputs.use-pull-request }}" = "true" ]; then
+            echo "**Pull Request**: [#${{ steps.create-pr.outputs.pr_number }}](${{ steps.create-pr.outputs.pr_url }})" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            if [ "${{ inputs.update-mode }}" = "increment" ]; then
+              echo "⚠️ **Action Required**: After merging the PR, manually create tag \`${{ steps.tag-info.outputs.incremented_tag_name }}\`" >> $GITHUB_STEP_SUMMARY
+            fi
+          elif [ "${{ inputs.update-mode }}" = "increment" ]; then
             echo "**New Tag**: \`${{ steps.tag-info.outputs.incremented_tag_name }}\` has been created with the updated CITATION.cff." >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Original Tag**: \`${{ steps.tag-info.outputs.tag_name }}\` remains unchanged." >> $GITHUB_STEP_SUMMARY
