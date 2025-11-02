@@ -79,12 +79,22 @@ jobs:
       
       - name: Check markdown files exist
         run: |
-          for file in README.md CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md CHANGELOG.md; do
+          # Check root-level markdown files
+          for file in README.md CHANGELOG.md; do
             if [ ! -f "$file" ]; then
               echo "ERROR: Missing $file"
               exit 1
             fi
           done
+          
+          # Check .github/ directory markdown files
+          for file in CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md; do
+            if [ ! -f ".github/$file" ]; then
+              echo "ERROR: Missing .github/$file"
+              exit 1
+            fi
+          done
+          
           echo "✓ All required markdown files present"
   
   check-shell-syntax:
