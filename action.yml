@@ -184,7 +184,7 @@ runs:
             echo "::error::"
             echo "::error::3. Use a PAT with admin/bypass permissions:"
             echo "::error::   with:"
-            echo "::error::     token: \${{ secrets.ADMIN_PAT }}"
+            echo "::error::     token: \$"'{{ secrets.ADMIN_TOKEN }}'
             echo "::error::"
             echo "::error::4. Configure branch protection to allow bypass for this workflow"
             echo "::error::"
