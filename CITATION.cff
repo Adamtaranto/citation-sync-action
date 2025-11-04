@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
 title: "Citation Sync Action"
-version: 0.1.0
-date-released: 2025-11-02
+version: 1.0.4
+date-released: 2025-11-04
 url: "https://github.com/Adamtaranto/citation-sync-action"
 repository-code: "https://github.com/Adamtaranto/citation-sync-action"
 license: MIT
