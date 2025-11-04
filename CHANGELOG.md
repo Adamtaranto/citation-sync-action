@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.0.5] - 2025-11-04
+
+### Fixed
+
+- **Branch protection detection**: Improved handling of HTTP 403 responses when checking branch protection status
+  - The default `GITHUB_TOKEN` lacks permission to read branch protection rules, resulting in 403 Forbidden
+  - Now provides clear informational message instead of warning when permissions are insufficient
+  - Explains available options when protection status cannot be determined
+  - Better distinguishes between permission issues (403) and other API errors
+
+## [v1.0.4] - 2025-11-04
+
+### Fixed
+
+- Auto bump cff version
+
+## [v1.0.3] - 2025-11-04
+
+### Fixed
+
+- **Tag selection**: Now correctly uses the triggering tag instead of the most recent tag
+  - Uses `github.ref_name` to get the exact tag that triggered the workflow
+  - Prevents incorrect version processing when moving tags are pushed after semantic tags
+- **Error reporting**: Improved job summary validation and error messages
+  - Added validation checks before displaying job summary information
+  - Shows appropriate error messages for different failure scenarios instead of misleading "No Update Required"
+
+## [v1.0.2] - 2025-11-04
+
+### Fixed
+
+- **Template parsing error**: Fixed `Unrecognized named-value: 'secrets'` error in error messages
+  - Composite actions cannot reference the `secrets` context, even in string literals
+  - Changed example from `${{ secrets.ADMIN_PAT }}` to properly escaped format
+
 ## [v1.0.1] - 2025-11-04
 
 ### Added
