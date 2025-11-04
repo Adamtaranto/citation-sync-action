@@ -77,6 +77,9 @@ outputs:
   needs-update:
     description: 'Whether CITATION.cff needed updating (true/false).'
     value: ${{ steps.check-update.outputs.needs_update }}
+  skipped:
+    description: 'Whether the update was skipped due to newer tags existing (true/false).'
+    value: ${{ steps.check-update.outputs.skip_reason == 'newer_tags_exist' }}
   original-tag:
     description: 'The tag that triggered this action.'
     value: ${{ steps.tag-info.outputs.tag_name }}
@@ -272,6 +275,84 @@ runs:
           echo "::error::Failed to parse semantic version from: ${TAG_VERSION}"
           exit 1
         fi
+    - name: Check for newer version tags
+      id: check-newer-tags
+      shell: bash
+      run: |
+        VERSION_PREFIX="${{ inputs.version-prefix }}"
+        VERSION_FORMAT="${{ inputs.version-format }}"
+        TAG_VERSION="${{ steps.tag-info.outputs.tag_version }}"
+
+        # Parse current tag version components
+        if [[ "${TAG_VERSION}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-[a-zA-Z0-9.-]+)?$ ]]; then
+          CURRENT_MAJOR="${BASH_REMATCH[1]}"
+          CURRENT_MINOR="${BASH_REMATCH[2]}"
+          CURRENT_PATCH="${BASH_REMATCH[3]}"
+          CURRENT_PRERELEASE="${BASH_REMATCH[4]}"
+        else
+          echo "::error::Failed to parse version: ${TAG_VERSION}"
+          exit 1
+        fi
+
+        echo "::group::Checking for newer version tags"
+
+        # Get all tags matching the expected format
+        ALL_TAGS=$(git tag -l "${VERSION_PREFIX}*" | sort -V)
+
+        # Check each tag to see if it's newer than the current tag
+        NEWER_TAG_FOUND=false
+        NEWER_TAGS=""
+
+        for TAG in ${ALL_TAGS}; do
+          # Extract version from tag
+          TAG_VER="${TAG#${VERSION_PREFIX}}"
+
+          # Validate format
+          if [[ ! "${TAG_VER}" =~ ${VERSION_FORMAT} ]]; then
+            continue
+          fi
+
+          # Parse components
+          if [[ "${TAG_VER}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-[a-zA-Z0-9.-]+)?$ ]]; then
+            TAG_MAJOR="${BASH_REMATCH[1]}"
+            TAG_MINOR="${BASH_REMATCH[2]}"
+            TAG_PATCH="${BASH_REMATCH[3]}"
+            TAG_PRERELEASE="${BASH_REMATCH[4]}"
+
+            # Compare versions (simple numeric comparison)
+            # Major version comparison
+            if [ "${TAG_MAJOR}" -gt "${CURRENT_MAJOR}" ]; then
+              NEWER_TAG_FOUND=true
+              NEWER_TAGS="${NEWER_TAGS}${TAG} "
+            elif [ "${TAG_MAJOR}" -eq "${CURRENT_MAJOR}" ]; then
+              # Minor version comparison
+              if [ "${TAG_MINOR}" -gt "${CURRENT_MINOR}" ]; then
+                NEWER_TAG_FOUND=true
+                NEWER_TAGS="${NEWER_TAGS}${TAG} "
+              elif [ "${TAG_MINOR}" -eq "${CURRENT_MINOR}" ]; then
+                # Patch version comparison
+                if [ "${TAG_PATCH}" -gt "${CURRENT_PATCH}" ]; then
+                  NEWER_TAG_FOUND=true
+                  NEWER_TAGS="${NEWER_TAGS}${TAG} "
+                fi
+              fi
+            fi
+          fi
+        done
+
+        if [ "${NEWER_TAG_FOUND}" = true ]; then
+          echo "has_newer_tags=true" >> $GITHUB_OUTPUT
+          echo "newer_tags=${NEWER_TAGS}" >> $GITHUB_OUTPUT
+          echo "::warning::⚠️ Newer version tags exist: ${NEWER_TAGS}"
+          echo "::warning::Skipping update to prevent downgrading CITATION.cff"
+          echo "::notice::Current tag: ${{ steps.tag-info.outputs.tag_name }} (${TAG_VERSION})"
+          echo "::notice::This appears to be a retrospectively created tag on an old commit"
+        else
+          echo "has_newer_tags=false" >> $GITHUB_OUTPUT
+          echo "::notice::✓ No newer version tags found"
+        fi
+
+        echo "::endgroup::"
     - name: Validate CITATION.cff structure (before update)
       shell: bash
       run: |
@@ -339,6 +420,15 @@ runs:
       id: check-update
       shell: bash
       run: |
+        # Skip update if newer tags exist (prevents downgrading on retrospective tags)
+        if [ "${{ steps.check-newer-tags.outputs.has_newer_tags }}" = "true" ]; then
+          echo "needs_update=false" >> $GITHUB_OUTPUT
+          echo "skip_reason=newer_tags_exist" >> $GITHUB_OUTPUT
+          echo "::notice::Skipping update - newer version tags exist: ${{ steps.check-newer-tags.outputs.newer_tags }}"
+          echo "::notice::This prevents downgrading CITATION.cff when processing retrospectively created tags"
+          exit 0
+        fi
+
         CURRENT_VERSION="${{ steps.parse-citation.outputs.current_version }}"
         CURRENT_DATE="${{ steps.parse-citation.outputs.current_date }}"
         TAG_DATE="${{ steps.tag-info.outputs.tag_date }}"
@@ -698,11 +788,25 @@ runs:
             echo "**Note**: No new tag was created (match mode)." >> $GITHUB_STEP_SUMMARY
           fi
         elif [ "${{ steps.check-update.outputs.needs_update }}" = "false" ]; then
-          echo "### ℹ️ No Update Required" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The CITATION.cff file already contains the correct information:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version**: ${{ steps.parse-citation.outputs.current_version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Date Released**: ${{ steps.parse-citation.outputs.current_date }}" >> $GITHUB_STEP_SUMMARY
+          # Check if it was skipped due to newer tags
+          if [ "${{ steps.check-update.outputs.skip_reason }}" = "newer_tags_exist" ]; then
+            echo "### ⏭️ Update Skipped" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Reason**: Newer version tags exist" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "This appears to be a retrospectively created tag on an old commit." >> $GITHUB_STEP_SUMMARY
+            echo "To prevent downgrading, the update was skipped." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Triggering Tag**: \`${{ steps.tag-info.outputs.tag_name }}\` (version: ${{ steps.tag-info.outputs.tag_version }})" >> $GITHUB_STEP_SUMMARY
+            echo "- **Newer Tags Found**: ${{ steps.check-newer-tags.outputs.newer_tags }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Current CITATION.cff Version**: ${{ steps.parse-citation.outputs.current_version }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ℹ️ No Update Required" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The CITATION.cff file already contains the correct information:" >> $GITHUB_STEP_SUMMARY
+            echo "- **Version**: ${{ steps.parse-citation.outputs.current_version }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Date Released**: ${{ steps.parse-citation.outputs.current_date }}" >> $GITHUB_STEP_SUMMARY
+          fi
         else
           echo "### ❌ Update Check Failed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
