@@ -215,6 +215,7 @@ jobs:
 | Output | Description |
 |--------|-------------|
 | `needs-update` | Whether CITATION.cff needed updating (`true`/`false`) |
+| `skipped` | Whether the update was skipped due to newer tags existing (`true`/`false`) |
 | `original-tag` | The tag that triggered this action |
 | `new-tag` | The new tag created (increment mode only) |
 | `new-version` | The new version written to CITATION.cff |
@@ -352,11 +353,23 @@ For a detailed explanation of the action's behavior, see [OVERVIEW.md](OVERVIEW.
 1. **Validation**: Checks CITATION.cff exists and is valid
 2. **Tag Parsing**: Extracts version from tag using configured prefix/format
 3. **Branch Detection**: Auto-detects default branch if not specified
-4. **Comparison**: Checks if version and date need updating
-5. **Update**: Creates backup, updates fields, validates changes
-6. **Commit**: Commits changes with configured message
-7. **Tag/Push**: Creates new tag (increment mode) or pushes commit (match mode)
-8. **Rollback**: Automatically restores backup if validation fails
+4. **Version Check**: Detects if newer version tags exist (prevents downgrades)
+5. **Comparison**: Checks if version and date need updating
+6. **Update**: Creates backup, updates fields, validates changes
+7. **Commit**: Commits changes with configured message
+8. **Tag/Push**: Creates new tag (increment mode) or pushes commit (match mode)
+9. **Rollback**: Automatically restores backup if validation fails
+
+### Retrospective Tag Protection
+
+The action automatically protects against version downgrades when retrospective tags are created:
+
+- **Scenario**: You tag an old commit as `v1.0.1` when `v1.0.6` already exists
+- **Behavior**: The action detects `v1.0.6` is newer and skips the update
+- **Result**: CITATION.cff remains at version `1.0.6` (no downgrade)
+- **Output**: The `skipped` output will be `true` and job summary explains why
+
+This ensures your CITATION.cff always reflects the latest version, even when old commits are tagged later.
 
 ## Examples
 

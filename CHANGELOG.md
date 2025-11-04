@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.0] - 2025-11-04
+
+### Added
+
+- **Version downgrade protection**: Automatically prevents updating CITATION.cff when retrospective tags are created
+  - New step detects if any tags with higher semantic versions exist
+  - Skips update with clear notice when newer tags are found
+  - Compares major.minor.patch versions respecting user's `version-prefix` and `version-format`
+  - New output `skipped` indicates when update was skipped due to newer tags
+  - Enhanced job summary shows skip reason and lists all newer tags found
+
+### Use Case
+
+If you retrospectively tag an old commit (e.g., `v1.0.1`) when a newer tag already exists (e.g., `v1.0.6`), the action will:
+- Detect that `v1.0.6` is newer than `v1.0.1`
+- Skip the update to prevent downgrading CITATION.cff from version 1.0.6 to 1.0.1
+- Display a clear message in the job summary explaining why the update was skipped
+
+## [v1.0.6] - 2025-11-04
+
+### Fixed
+
+- Auto bump cff version
+
 ## [v1.0.5] - 2025-11-04
 
 ### Fixed
